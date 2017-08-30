@@ -17,6 +17,10 @@
 #include <map>
 #include <tuple>
 #include <csignal>
+#include <algorithm>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/stat.h>
 
 using namespace Net;
 
@@ -34,6 +38,27 @@ void waitForShutdown(ench::EnchiladaServer *ench) {
   }
 
   ench->shutdown();
+}
+
+bool is_number(const std::string &s) {
+  return !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
+}
+
+void die(const std::string &message) {
+  std::cerr << "Die: " << message;
+
+  if (errno != 0) {
+      std::cerr << " (" << strerror(errno) << ")";
+  }
+
+  std::cerr << std::endl;
+
+  std::exit(1);
+}
+
+bool exists(const std::string &path) {
+  struct stat statbuf;
+  return (stat(path.c_str(), &statbuf) == 0);
 }
 
 int main(int argc, const char **argv)
@@ -59,7 +84,7 @@ int main(int argc, const char **argv)
 
     /*
      * A volume hash table that keeps PBNJ objects of a dataset
-     * in one place 
+     * in one place
      */
     std::map<std::string, ench::pbnj_container> volume_map;
 
@@ -149,10 +174,31 @@ int main(int argc, const char **argv)
         }
     }
 
-    Net::Port port(9080);
-    port = std::stol(argv[2]);
+    Net::Address addr;
 
-    Net::Address addr(Net::Ipv4::any(), port);
+    if (is_number(argv[2])) {
+        Net::Port port(9080);
+        port = std::stol(argv[2]);
+        addr = Net::Address(Net::Ipv4::any(), port);
+
+    } else {
+        if (exists(argv[2])) {
+            unlink(argv[2]);
+        }
+
+        int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (sockfd == -1) die("socket");
+
+        struct sockaddr_un my_addr;
+        memset(&my_addr, 0, sizeof(my_addr));
+        my_addr.sun_family = AF_UNIX;
+        strncpy(my_addr.sun_path, argv[2], sizeof(my_addr.sun_path) - 1);
+
+        if (bind(sockfd, (struct sockaddr *)&my_addr, sizeof(my_addr)) == -1)
+            die("bind");
+
+        addr = Net::Address::fromUnix((struct sockaddr *)&my_addr);
+    }
 
     ench::EnchiladaServer eserver(addr, volume_map);
     eserver.init(1);
